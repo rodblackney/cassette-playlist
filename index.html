@@ -1,0 +1,924 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mixtape Maker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link id="gfonts" rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Alfa+Slab+One&family=Archivo+Black&family=Nothing+You+Could+Do&family=Reenie+Beanie&family=Rock+Salt&family=Permanent+Marker&family=Schibsted+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* Layout: the tape sits on a black, topo-lined table; the editor is a side column that hides in listen mode. */
+  :root {
+    --bg: #0b0b0b;
+    --panel: #151515;
+    --line: #2a2a2a;
+    --fg: #ececec;
+    --muted: #8a8a8a;
+    --accent: #d8cf3c;      /* label mustard */
+    --accent-fg: #0b0b0b;
+    --font-ui: "Schibsted Grotesk", system-ui, -apple-system, sans-serif;
+    --font-data: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    --font-display: "Archivo Black", "Arial Black", sans-serif;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { min-height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.45 var(--font-ui);
+  }
+  #topo { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 0; pointer-events: none; }
+
+  .app {
+    position: relative; z-index: 1;
+    max-width: 1440px; margin: 0 auto; padding: 16px;
+    display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 24px;
+  }
+  body.listen .app { grid-template-columns: minmax(0, 1fr); max-width: 1100px; }
+  body.listen .controls { display: none; }
+
+  header { grid-column: 1 / -1; display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  h1 { margin: 0; font: 400 22px/1 var(--font-display); letter-spacing: -0.01em; }
+  h1 span { color: var(--accent); }
+  .tag { font: 12px var(--font-data); color: var(--muted); }
+
+  /* ---------- Deck ---------- */
+  .deck { min-width: 0; display: flex; flex-direction: column; gap: 18px; }
+  #tape { width: 100%; height: auto; display: block; cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent; }
+  .tape-wrap { position: relative; }
+  body:not(.listen) #tape { touch-action: none; }
+  #tape.over-text { cursor: move; }
+  #tape.over-handle { cursor: nwse-resize; }
+  #tape.dragging { cursor: grabbing; }
+  .inline-edit {
+    position: absolute; z-index: 2; margin: 0; padding: 0 .08em;
+    background: rgba(255,255,255,.08); border: 0; border-radius: 4px;
+    outline: 2px dashed var(--edit-ring, #000); outline-offset: 2px;
+    color: var(--edit-ink, #0d0d0d); line-height: 1;
+  }
+  #tape:focus-visible { outline: 2px solid var(--accent); outline-offset: 6px; border-radius: 24px; }
+
+  .transport { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  .key {
+    font: 400 13px var(--font-display); letter-spacing: .06em; color: var(--fg);
+    background: linear-gradient(#262626, #161616); border: 1px solid #333; border-bottom-width: 4px;
+    border-radius: 6px; padding: 12px 18px; min-width: 92px; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  }
+  .key:hover { border-color: #555; }
+  .key:active, .key[aria-pressed="true"] { border-bottom-width: 1px; transform: translateY(3px); background: #111; }
+  .key[aria-pressed="true"] { color: var(--accent); }
+  .key svg { width: 14px; height: 14px; fill: currentColor; }
+
+  .status { text-align: center; font: 12px var(--font-data); color: var(--muted); min-height: 1.4em; }
+  .status b { color: var(--accent); font-weight: 500; }
+
+  .jcard { border: 1px solid var(--line); background: var(--panel); border-radius: 12px; overflow: hidden; }
+  .jcard summary {
+    list-style: none; cursor: pointer; padding: 12px 16px;
+    font: 500 11px var(--font-data); text-transform: uppercase; letter-spacing: .08em; color: var(--muted);
+    display: flex; justify-content: space-between;
+  }
+  .jcard summary::-webkit-details-marker { display: none; }
+  .jcard summary::after { content: "+"; }
+  .jcard[open] summary::after { content: "–"; }
+  #embed { padding: 0 12px 12px; }
+  #embed iframe { display: block; border-radius: 12px; }
+  .empty { padding: 0 16px 16px; color: var(--muted); }
+
+  .listen-bar { display: none; justify-content: center; }
+  body.listen .listen-bar { display: flex; }
+
+  /* ---------- Controls ---------- */
+  .controls {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px; display: flex; flex-direction: column; gap: 18px;
+    align-self: start; min-width: 0; position: sticky; top: 16px;
+  }
+  fieldset { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  legend { padding: 0; margin-bottom: 10px; font: 500 11px var(--font-data); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  .rule { height: 1px; background: var(--line); }
+  .field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .field label { font-weight: 500; }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  input[type="text"], input[type="url"], select {
+    width: 100%; font: 14px var(--font-ui); color: var(--fg);
+    background: #0e0e0e; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px;
+  }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  .hint { font: 12px var(--font-data); color: var(--muted); }
+  .hint.err { color: #ff7a6b; }
+  .hint.ok { color: var(--accent); }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    font: 500 13px var(--font-ui); color: var(--fg);
+    background: transparent; border: 1px solid var(--line); border-radius: 999px;
+    padding: 5px 11px; cursor: pointer;
+  }
+  .chip:hover { border-color: var(--fg); }
+  .chip[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  .chip.hand { font-size: 17px; padding: 2px 12px; }
+
+  .swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+  .pal {
+    width: 40px; height: 26px; border-radius: 6px; cursor: pointer; padding: 0; border: 1px solid var(--line);
+    background: linear-gradient(90deg, var(--a) 50%, var(--b) 50%);
+  }
+  .pal[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--fg); }
+  .colors { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .colors label { display: flex; align-items: center; gap: 8px; font-weight: 500; }
+  input[type="color"] { width: 34px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; cursor: pointer; }
+
+  .btn {
+    font: 500 14px var(--font-ui); border-radius: 8px; padding: 10px 14px; cursor: pointer;
+    border: 1px solid var(--line); background: transparent; color: var(--fg); width: 100%;
+  }
+  .btn:hover { border-color: var(--fg); }
+  .btn.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+  .btn.primary:hover { filter: brightness(1.08); }
+  .btn.inline { width: auto; }
+  .actions { display: flex; flex-direction: column; gap: 8px; }
+
+  @media (max-width: 900px) {
+    .app { grid-template-columns: minmax(0, 1fr); }
+    .controls { position: static; }
+    .key { min-width: 0; padding: 10px 12px; }
+  }
+</style>
+</head>
+<body>
+<svg id="topo" aria-hidden="true"></svg>
+
+<div class="app">
+  <header>
+    <h1>MIXTAPE <span>MAKER</span></h1>
+    <span class="tag" id="tagline">dub a playlist onto tape · share the link</span>
+  </header>
+
+  <main class="deck">
+    <div class="tape-wrap" id="tapeWrap">
+    <svg id="tape" viewBox="0 0 1280 840" role="button" tabindex="0" aria-label="Cassette. Click to play or pause." xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <pattern id="dots" width="9" height="9" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+          <circle cx="4.5" cy="4.5" r="3" fill="#000"/>
+        </pattern>
+        <pattern id="dotsFine" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+          <circle cx="3" cy="3" r="1.5" fill="#000"/>
+        </pattern>
+        <linearGradient id="shade" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#fff" stop-opacity=".55"/>
+          <stop offset=".5" stop-color="#fff" stop-opacity=".95"/>
+          <stop offset="1" stop-color="#fff" stop-opacity=".7"/>
+        </linearGradient>
+        <mask id="dotMask" maskUnits="userSpaceOnUse" x="0" y="0" width="1280" height="840">
+          <rect x="0" y="0" width="1280" height="840" fill="url(#shade)"/>
+        </mask>
+        <clipPath id="shellClip">
+          <path id="shellPath" d="M88 40 H1192 Q1240 40 1240 88 V752 Q1240 800 1192 800 H88 Q40 800 40 752 V88 Q40 40 88 40 Z"/>
+        </clipPath>
+        <clipPath id="labelClip">
+          <path d="M138 110 H1142 Q1170 110 1170 138 V600 H110 V138 Q110 110 138 110 Z"/>
+        </clipPath>
+        <clipPath id="whiteClip"><rect x="110" y="110" width="1060" height="200"/></clipPath>
+        <clipPath id="reelL"><circle cx="395" cy="392" r="62"/></clipPath>
+        <clipPath id="reelR"><circle cx="895" cy="392" r="62"/></clipPath>
+        <clipPath id="midClip"><rect x="520" y="338" width="250" height="72" rx="4"/></clipPath>
+        <!-- screenprint wobble: roughens every edge a touch -->
+        <filter id="grit" x="-2%" y="-2%" width="104%" height="104%">
+          <feTurbulence type="fractalNoise" baseFrequency=".9" numOctaves="2" seed="4" result="n"/>
+          <feDisplacementMap in="SourceGraphic" in2="n" scale="3.5" xChannelSelector="R" yChannelSelector="G"/>
+        </filter>
+        <!-- ink specks and worn spots -->
+        <filter id="specks" x="0" y="0" width="100%" height="100%">
+          <feTurbulence type="fractalNoise" baseFrequency=".55" numOctaves="3" seed="11"/>
+          <feColorMatrix type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  30 0 0 0 -21"/>
+        </filter>
+        <filter id="wear" x="0" y="0" width="100%" height="100%">
+          <feTurbulence type="fractalNoise" baseFrequency=".8" numOctaves="2" seed="23"/>
+          <feColorMatrix type="matrix" values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 30 0 0 -20.5"/>
+        </filter>
+      </defs>
+
+      <g id="cassette" filter="url(#grit)">
+        <!-- misregistered shell plate -->
+        <use href="#shellPath" class="shell-fill" transform="translate(7 -5)" opacity=".9"/>
+        <path d="M88 40 H1192 Q1240 40 1240 88 V752 Q1240 800 1192 800 H88 Q40 800 40 752 V88 Q40 40 88 40 Z" fill="#000"/>
+        <g clip-path="url(#shellClip)">
+          <path d="M88 40 H1192 Q1240 40 1240 88 V752 Q1240 800 1192 800 H88 Q40 800 40 752 V88 Q40 40 88 40 Z" class="shell-fill"/>
+          <rect x="54" y="54" width="1172" height="732" rx="34" fill="url(#dots)" mask="url(#dotMask)"/>
+          <rect x="47" y="47" width="1186" height="746" rx="42" fill="none" class="shell-stroke" stroke-width="10"/>
+          <rect x="62" y="62" width="1156" height="716" rx="30" fill="none" stroke="#000" stroke-width="3"/>
+        </g>
+
+        <!-- screws -->
+        <g id="screws"></g>
+
+        <!-- bottom head-access trapezoid -->
+        <path d="M300 640 H980 L1022 800 H258 Z" fill="#000"/>
+        <path d="M312 652 H968 L1004 790 H276 Z" fill="url(#dots)" class="shell-fill"/>
+        <path d="M312 652 H968 L1004 790 H276 Z" fill="url(#dots)"/>
+        <g fill="#000">
+          <circle cx="640" cy="690" r="22"/>
+          <circle cx="372" cy="752" r="24"/>
+          <circle cx="908" cy="752" r="24"/>
+          <rect x="474" y="726" width="44" height="50" rx="12"/>
+          <rect x="762" y="726" width="44" height="50" rx="12"/>
+        </g>
+        <circle cx="372" cy="752" r="10" class="shell-fill"/>
+        <circle cx="908" cy="752" r="10" class="shell-fill"/>
+
+        <!-- label -->
+        <g clip-path="url(#labelClip)">
+          <rect x="104" y="104" width="1072" height="502" fill="#000"/>
+          <rect x="110" y="110" width="1060" height="200" fill="#f6f4ee"/>
+          <g id="grid" clip-path="url(#whiteClip)" stroke="#bdbdb8" stroke-width="1.6" fill="none"></g>
+          <rect x="110" y="300" width="1060" height="182" class="accent-fill"/>
+          <rect x="110" y="482" width="1060" height="118" fill="#000"/>
+          <rect x="110" y="482" width="1060" height="118" fill="url(#dotsFine)" opacity=".0"/>
+        </g>
+
+        <text x="168" y="185" font-family="Archivo Black" font-size="27" letter-spacing="3" fill="#111">INDEX</text>
+        <text id="tTitle" x="340" y="226" font-family="Nothing You Could Do" font-size="92" fill="#0d0d0d">Portland</text>
+        <text id="tDate" x="1110" y="204" text-anchor="end" font-family="Nothing You Could Do" font-size="58" fill="#0d0d0d">10/9/22</text>
+
+        <text id="tCode1" x="205" y="388" text-anchor="middle" font-family="Archivo Black" font-size="50" fill="#fff">MS</text>
+        <text id="tCode2" x="205" y="440" text-anchor="middle" font-family="Archivo Black" font-size="50" fill="#fff">400</text>
+
+        <!-- window -->
+        <rect x="300" y="300" width="690" height="176" rx="88" fill="#000"/>
+        <g>
+          <circle cx="395" cy="392" r="62" class="accent-fill"/>
+          <circle cx="895" cy="392" r="62" class="accent-fill"/>
+          <g clip-path="url(#reelL)"><circle id="packL" cx="395" cy="392" r="56" fill="#000"/></g>
+          <g clip-path="url(#reelR)"><circle id="packR" cx="895" cy="392" r="30" fill="#000"/></g>
+          <g id="hubL"></g>
+          <g id="hubR"></g>
+        </g>
+        <rect x="520" y="338" width="250" height="72" rx="4" class="accent-fill"/>
+        <g clip-path="url(#midClip)">
+          <ellipse id="midL" cx="520" cy="412" rx="150" ry="40" fill="#000"/>
+          <ellipse id="midR" cx="770" cy="412" rx="40" ry="22" fill="#000"/>
+          <rect x="520" y="400" width="250" height="12" fill="#000"/>
+          <line x1="520" y1="352" x2="770" y2="352" stroke="#000" stroke-width="2" opacity=".5"/>
+        </g>
+        <g id="ticks" class="accent-stroke" stroke-width="3"></g>
+        <g class="accent-text" font-family="Archivo Black" font-size="17" text-anchor="middle">
+          <text x="538" y="456">100</text><text x="645" y="456">50</text><text x="752" y="456">0</text>
+        </g>
+
+        <text id="tBrand" x="215" y="572" font-family="Alfa Slab One" font-size="78" letter-spacing="2" class="accent-text">SEVOX</text>
+        <text id="tLen" x="1095" y="572" text-anchor="end" font-family="Archivo Black" font-size="80" class="accent-text">C60</text>
+      </g>
+
+      <!-- ink wear on top of everything -->
+      <g clip-path="url(#shellClip)" pointer-events="none">
+        <rect x="40" y="40" width="1200" height="760" filter="url(#specks)" opacity=".4"/>
+        <rect x="40" y="40" width="1200" height="760" filter="url(#wear)" opacity=".25"/>
+      </g>
+      <g id="sel" pointer-events="none" display="none">
+        <rect id="selBox" fill="none" stroke="#000" stroke-width="7" rx="8"/>
+        <rect id="selBox2" fill="none" stroke="#fff" stroke-width="3" stroke-dasharray="12 8" rx="8"/>
+        <circle id="selHandle" r="15" fill="#fff" stroke="#000" stroke-width="5"/>
+      </g>
+    </svg>
+    </div>
+
+    <div class="transport" role="group" aria-label="Transport">
+      <button class="key" id="kRew" type="button"><svg viewBox="0 0 16 16"><path d="M8 3 1 8l7 5V3Zm7 0-7 5 7 5V3Z"/></svg>REW</button>
+      <button class="key" id="kPlay" type="button" aria-pressed="false"><svg viewBox="0 0 16 16"><path d="M3 2v12l11-6z"/></svg>PLAY</button>
+      <button class="key" id="kStop" type="button"><svg viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10"/></svg>STOP</button>
+    </div>
+    <div class="status" id="status">Paste a Spotify playlist to dub it onto the tape. Drag writing to move it, pull the corner to resize, click again to retype.</div>
+
+    <div class="listen-bar"><button class="btn inline" id="makeOwn" type="button">Make your own tape</button></div>
+
+    <details class="jcard" id="jcard" open>
+      <summary>J-card · tracklist</summary>
+      <div id="embedWrap"><div id="embed"><div id="embedTarget"></div></div><p class="empty" id="embedEmpty">No playlist on this tape yet.</p></div>
+    </details>
+  </main>
+
+  <aside class="controls" aria-label="Tape editor">
+    <fieldset>
+      <legend>Source</legend>
+      <div class="field">
+        <label for="fUrl">Spotify link</label>
+        <input id="fUrl" type="url" placeholder="https://open.spotify.com/playlist/…" autocomplete="off" spellcheck="false">
+        <span class="hint" id="urlHint">Playlist, album or track link.</span>
+      </div>
+    </fieldset>
+    <div class="rule"></div>
+    <fieldset>
+      <legend>Index card</legend>
+      <div class="field">
+        <label for="fTitle">Title</label>
+        <input id="fTitle" type="text" maxlength="40" value="Portland">
+      </div>
+      <div class="field">
+        <label for="fDate">Date</label>
+        <input id="fDate" type="text" maxlength="14" value="10/9/22">
+      </div>
+      <div class="field">
+        <label>Handwriting</label>
+        <div class="chips" id="hands"></div>
+      </div>
+      <button class="btn" id="resetLayout" type="button">Reset text positions</button>
+    </fieldset>
+    <div class="rule"></div>
+    <fieldset>
+      <legend>Shell</legend>
+      <div class="row">
+        <div class="field"><label for="fBrand">Brand</label><input id="fBrand" type="text" maxlength="10" value="SEVOX"></div>
+        <div class="field"><label for="fCode">Type</label><input id="fCode" type="text" maxlength="10" value="MS 400"></div>
+      </div>
+      <div class="field">
+        <label>Length</label>
+        <div class="chips" id="lengths"></div>
+      </div>
+      <div class="field">
+        <label>Colourway</label>
+        <div class="swatches" id="palettes"></div>
+      </div>
+      <div class="colors">
+        <label><input type="color" id="cShell" value="#27c1cc"> Shell</label>
+        <label><input type="color" id="cAccent" value="#d8cf3c"> Label</label>
+      </div>
+    </fieldset>
+    <div class="rule"></div>
+    <div class="actions">
+      <button class="btn primary" id="share" type="button">Copy share link</button>
+      <button class="btn" id="preview" type="button">Preview as listener</button>
+      <button class="btn" id="png" type="button">Download PNG</button>
+      <span class="hint" id="actionHint"></span>
+    </div>
+  </aside>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const NS = "http://www.w3.org/2000/svg";
+const el = (tag, attrs = {}, parent) => {
+  const n = document.createElementNS(NS, tag);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(n);
+  return n;
+};
+
+const HANDS = ["Nothing You Could Do", "Reenie Beanie", "Rock Salt", "Permanent Marker"];
+const LENGTHS = ["C46", "C60", "C90", "C120"];
+const PALETTES = [
+  { name: "Sevox", s: "#27c1cc", a: "#d8cf3c" },
+  { name: "Bubblegum", s: "#ff5ba7", a: "#ffd23f" },
+  { name: "Tangerine", s: "#ff7a1a", a: "#4fb3ff" },
+  { name: "Smoke", s: "#9aa3a8", a: "#e8533a" },
+  { name: "Lime", s: "#b6e33d", a: "#ff4fd8" },
+  { name: "Chrome", s: "#e9e9e4", a: "#e2231a" },
+];
+
+const state = {
+  u: "", t: "Portland", d: "10/9/22", b: "SEVOX", c: "MS 400", l: "C60",
+  s: "#27c1cc", a: "#d8cf3c", f: 0,
+  x: {}, // per-text layout: { key: { dx, dy, k } }
+};
+
+/* ---------- Background topo lines ---------- */
+function drawTopo() {
+  const svg = $("topo");
+  const w = innerWidth, h = innerHeight;
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  svg.innerHTML = "";
+  const g = el("g", { fill: "none", stroke: "#1f1f1f", "stroke-width": 1.2 }, svg);
+  const rows = Math.ceil(h / 26) + 6;
+  for (let i = 0; i < rows; i++) {
+    const y0 = i * 26 - 60;
+    let d = "";
+    for (let x = -20; x <= w + 20; x += 16) {
+      const y = y0 + Math.sin(x * 0.006 + i * 0.35) * 22 + Math.sin(x * 0.017 - i * 0.8) * 9 + Math.cos(x * 0.0021 + i * 0.13) * 30;
+      d += (x === -20 ? "M" : "L") + x.toFixed(1) + " " + y.toFixed(1);
+    }
+    el("path", { d }, g);
+  }
+}
+
+/* ---------- Static cassette parts ---------- */
+function drawGrid() {
+  // a receding grid "room" behind the handwriting
+  const g = $("grid");
+  const cx = 640, cy = 210, bw = 150, bh = 30;
+  const zs = [1, .86, .74, .63, .53, .44, .36, .29, .23, .18];
+  for (const z of zs) {
+    const s = 1 / z;
+    el("rect", { x: cx - bw * s, y: cy - bh * s, width: bw * 2 * s, height: bh * 2 * s }, g);
+  }
+  const far = 6;
+  const pts = [];
+  for (let i = -5; i <= 5; i++) { pts.push([cx + i * bw / 5, cy - bh]); pts.push([cx + i * bw / 5, cy + bh]); }
+  for (let j = -1; j <= 1; j++) { pts.push([cx - bw, cy + j * bh]); pts.push([cx + bw, cy + j * bh]); }
+  for (const [x, y] of pts) {
+    el("line", { x1: x, y1: y, x2: cx + (x - cx) * far, y2: cy + (y - cy) * far }, g);
+  }
+  for (let i = -4; i <= 4; i++) el("line", { x1: cx + i * bw / 5, y1: cy - bh, x2: cx + i * bw / 5, y2: cy + bh }, g);
+  el("line", { x1: cx - bw, y1: cy, x2: cx + bw, y2: cy }, g);
+}
+
+function drawHub(g, cx, cy) {
+  el("circle", { cx, cy, r: 24, class: "accent-fill" }, g);
+  el("circle", { cx, cy, r: 24, fill: "none", stroke: "#000", "stroke-width": 3 }, g);
+  for (let i = 0; i < 6; i++) {
+    const a = i * Math.PI / 3;
+    el("rect", { x: cx - 3.5, y: cy - 17, width: 7, height: 9, fill: "#000", transform: `rotate(${i * 60} ${cx} ${cy})` }, g);
+  }
+  el("circle", { cx, cy, r: 8, fill: "none", stroke: "#000", "stroke-width": 3 }, g);
+}
+
+function drawStatic() {
+  drawGrid();
+  const screws = $("screws");
+  for (const [x, y] of [[86, 86], [1194, 86], [86, 754], [1194, 754], [640, 72]]) {
+    el("circle", { cx: x, cy: y, r: 17, fill: "#000" }, screws);
+    el("circle", { cx: x, cy: y, r: 12, class: "shell-fill" }, screws);
+    el("path", { d: `M${x - 8} ${y - 8} L${x + 8} ${y + 8} M${x + 8} ${y - 8} L${x - 8} ${y + 8}`, stroke: "#000", "stroke-width": 3.5 }, screws);
+  }
+  drawHub($("hubL"), 395, 392);
+  drawHub($("hubR"), 895, 392);
+  const ticks = $("ticks");
+  for (let i = 0; i <= 20; i++) {
+    const x = 538 + i * (214 / 20);
+    el("line", { x1: x, y1: 418, x2: x, y2: i % 5 === 0 ? 436 : 428 }, ticks);
+  }
+}
+
+/* ---------- Render state onto the tape ---------- */
+function fitText(node, maxW, baseSize) {
+  node.setAttribute("font-size", baseSize);
+  const w = node.getComputedTextLength();
+  if (w > maxW) node.setAttribute("font-size", (baseSize * maxW / w).toFixed(1));
+}
+
+function render() {
+  const root = document.documentElement;
+  root.style.setProperty("--accent", state.a);
+  const css = `.shell-fill{fill:${state.s}} .shell-stroke{stroke:${state.s}} .accent-fill{fill:${state.a}} .accent-stroke{stroke:${state.a}} .accent-text{fill:${state.a}}`;
+  let st = $("tapeStyle");
+  if (!st) { st = el("style", { id: "tapeStyle" }); $("tape").prepend(st); }
+  st.textContent = css;
+
+  const hand = HANDS[state.f] || HANDS[0];
+  const title = $("tTitle"), date = $("tDate");
+  title.textContent = state.t || " ";
+  date.textContent = state.d || "";
+  title.setAttribute("font-family", hand);
+  date.setAttribute("font-family", hand);
+  fitText(date, 280, 58);
+  const dateW = state.d ? date.getComputedTextLength() : 0;
+  fitText(title, 1110 - dateW - 40 - 340, 92);
+
+  const [c1, ...rest] = (state.c || "").trim().split(/\s+/);
+  $("tCode1").textContent = c1 || "";
+  $("tCode2").textContent = rest.join(" ");
+  fitText($("tCode1"), 150, 50);
+  fitText($("tCode2"), 150, 50);
+
+  $("tBrand").textContent = (state.b || "").toUpperCase();
+  fitText($("tBrand"), 560, 78);
+  $("tLen").textContent = state.l;
+  applyLayout();
+
+  document.querySelectorAll("#hands .chip").forEach((b, i) => b.setAttribute("aria-pressed", i === state.f));
+  document.querySelectorAll("#lengths .chip").forEach((b) => b.setAttribute("aria-pressed", b.textContent === state.l));
+  document.querySelectorAll("#palettes .pal").forEach((b) => b.setAttribute("aria-pressed", b.dataset.s === state.s && b.dataset.a === state.a));
+  $("cShell").value = state.s;
+  $("cAccent").value = state.a;
+  document.title = state.t ? `${state.t} · Mixtape` : "Mixtape Maker";
+  drawSel();
+}
+
+/* ---------- Reels ---------- */
+let angle = 0, progress = 0, playing = false, lastT = 0;
+function setProgress(p) {
+  progress = Math.max(0, Math.min(1, p));
+  const min = 30, max = 58;
+  const rl = Math.sqrt(min * min + (max * max - min * min) * (1 - progress));
+  const rr = Math.sqrt(min * min + (max * max - min * min) * progress);
+  $("packL").setAttribute("r", rl.toFixed(1));
+  $("packR").setAttribute("r", rr.toFixed(1));
+  $("midL").setAttribute("rx", (40 + 110 * (1 - progress)).toFixed(1));
+  $("midL").setAttribute("ry", (22 + 18 * (1 - progress)).toFixed(1));
+  $("midR").setAttribute("rx", (40 + 110 * progress).toFixed(1));
+  $("midR").setAttribute("ry", (22 + 18 * progress).toFixed(1));
+}
+function tick(t) {
+  const dt = lastT ? Math.min(64, t - lastT) : 16;
+  lastT = t;
+  if (playing) {
+    angle = (angle + dt * 0.12) % 360;
+    $("hubL").setAttribute("transform", `rotate(${angle} 395 392)`);
+    $("hubR").setAttribute("transform", `rotate(${angle} 895 392)`);
+    if (!controller) setProgress(progress + dt / 240000); // demo spin with no playlist
+  }
+  requestAnimationFrame(tick);
+}
+
+/* ---------- Spotify ---------- */
+function parseSpotify(input) {
+  if (!input) return null;
+  const s = input.trim();
+  let m = s.match(/^spotify:(playlist|album|track|episode|show|artist):([A-Za-z0-9]+)/);
+  if (m) return `spotify:${m[1]}:${m[2]}`;
+  m = s.match(/open\.spotify\.com\/(?:intl-[a-z-]+\/)?(?:embed\/)?(playlist|album|track|episode|show|artist)\/([A-Za-z0-9]+)/i);
+  if (m) return `spotify:${m[1].toLowerCase()}:${m[2]}`;
+  return null;
+}
+
+let IFrameAPI = null, controller = null, pendingPlay = false, ready = false;
+window.onSpotifyIframeApiReady = (api) => { IFrameAPI = api; mountPlayer(); };
+
+function mountPlayer() {
+  const uri = parseSpotify(state.u);
+  $("embedEmpty").hidden = !!uri;
+  $("embed").hidden = !uri;
+  if (!uri || !IFrameAPI) return;
+  if (controller) { ready = false; controller.loadUri(uri); return; }
+  IFrameAPI.createController($("embedTarget"), { uri, width: "100%", height: 352 }, (c) => {
+    controller = c;
+    c.addListener("ready", () => {
+      ready = true;
+      if (pendingPlay) { pendingPlay = false; c.play(); }
+    });
+    c.addListener("playback_update", (e) => {
+      const { isPaused, isBuffering, position, duration } = e.data;
+      setPlaying(!isPaused);
+      if (duration) setProgress(position / duration);
+      setStatus(isPaused ? "Paused." : `<b>▶ Playing</b> · ${fmt(position)} / ${fmt(duration)}`);
+    });
+  });
+}
+const fmt = (ms) => { const s = Math.floor((ms || 0) / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+
+function setPlaying(v) {
+  playing = v;
+  $("kPlay").setAttribute("aria-pressed", v);
+}
+function setStatus(html) { $("status").innerHTML = html; }
+
+function play() {
+  if (!parseSpotify(state.u)) {
+    setPlaying(!playing);
+    setStatus(playing ? "Spinning blank tape. Paste a Spotify link to dub something on." : "Paste a Spotify playlist to dub it onto the tape.");
+    return;
+  }
+  if (!controller || !ready) { pendingPlay = true; setStatus("Loading tape…"); return; }
+  controller.togglePlay();
+}
+function stop() {
+  if (controller && ready) controller.pause();
+  setPlaying(false);
+}
+function rewind() {
+  if (controller && ready) { controller.restart(); }
+  else setProgress(0);
+}
+
+/* ---------- Share via URL hash ---------- */
+const enc = (o) => btoa(unescape(encodeURIComponent(JSON.stringify(o)))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const dec = (s) => JSON.parse(decodeURIComponent(escape(atob(s.replace(/-/g, "+").replace(/_/g, "/")))));
+function shareURL() { return location.href.split("#")[0] + "#" + enc(state); }
+
+/* ---------- PNG export (fonts inlined so the canvas sees them) ---------- */
+async function fontCSS() {
+  const fams = ["Alfa Slab One", "Archivo Black", HANDS[state.f]];
+  const url = "https://fonts.googleapis.com/css2?" + fams.map((f) => "family=" + f.replace(/ /g, "+")).join("&") + "&display=swap";
+  let css = await (await fetch(url)).text();
+  const urls = [...new Set(css.match(/https:[^)]+\.woff2/g) || [])];
+  for (const u of urls) {
+    const buf = await (await fetch(u)).arrayBuffer();
+    let bin = ""; const bytes = new Uint8Array(buf);
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    css = css.split(u).join("data:font/woff2;base64," + btoa(bin));
+  }
+  return css;
+}
+async function downloadPNG() {
+  $("actionHint").className = "hint"; $("actionHint").textContent = "Rendering…";
+  try {
+    const clone = $("tape").cloneNode(true);
+    clone.querySelector("#sel").remove();
+    const pad = 60;
+    clone.setAttribute("viewBox", `${-pad} ${-pad} ${1280 + pad * 2} ${840 + pad * 2}`);
+    clone.setAttribute("width", (1280 + pad * 2) * 2);
+    clone.setAttribute("height", (840 + pad * 2) * 2);
+    const bg = el("rect", { x: -pad, y: -pad, width: 1280 + pad * 2, height: 840 + pad * 2, fill: "#0b0b0b" });
+    clone.insertBefore(bg, clone.querySelector("#cassette"));
+    const style = el("style");
+    style.textContent = (await fontCSS()) + $("tapeStyle").textContent;
+    clone.prepend(style);
+    const xml = new XMLSerializer().serializeToString(clone);
+    const img = new Image();
+    img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(xml);
+    await img.decode();
+    const cv = document.createElement("canvas");
+    cv.width = img.width; cv.height = img.height;
+    cv.getContext("2d").drawImage(img, 0, 0);
+    const a = document.createElement("a");
+    a.download = (state.t || "mixtape").replace(/[^\w-]+/g, "-").toLowerCase() + ".png";
+    a.href = cv.toDataURL("image/png");
+    a.click();
+    $("actionHint").textContent = "";
+  } catch (e) {
+    $("actionHint").className = "hint err"; $("actionHint").textContent = "Couldn't render the PNG.";
+  }
+}
+
+/* ---------- Write directly on the tape ---------- */
+// Each editable spot: which state key it writes, which SVG text nodes it covers, and how the input should look.
+const SPOTS = [
+  { key: "t", nodes: ["tTitle"], max: 40, ink: "#0d0d0d", ring: "#0d0d0d", hand: true },
+  { key: "d", nodes: ["tDate"], max: 14, ink: "#0d0d0d", ring: "#0d0d0d", hand: true, align: "right" },
+  { key: "c", nodes: ["tCode1", "tCode2"], max: 10, ink: "#fff", ring: "#fff", font: "Archivo Black", align: "center" },
+  { key: "b", nodes: ["tBrand"], max: 10, ink: "accent", ring: "accent", font: "Alfa Slab One", upper: true },
+  { key: "l", nodes: ["tLen"], max: 5, ink: "accent", ring: "accent", font: "Archivo Black", upper: true, align: "right" },
+];
+const FIELD_FOR = { t: "fTitle", d: "fDate", c: "fCode", b: "fBrand" };
+
+const tr = (key) => ({ dx: 0, dy: 0, k: 1, ...(state.x && state.x[key]) });
+function setTr(key, v) { state.x = { ...state.x, [key]: { ...tr(key), ...v } }; }
+function anchorOf(spot) { const n = $(spot.nodes[0]); return { x: +n.getAttribute("x"), y: +n.getAttribute("y") }; }
+function applyLayout() {
+  for (const sp of SPOTS) {
+    const { dx, dy, k } = tr(sp.key), a = anchorOf(sp);
+    const t = `translate(${dx} ${dy}) translate(${a.x} ${a.y}) scale(${k}) translate(${-a.x} ${-a.y})`;
+    sp.nodes.forEach((id) => $(id).setAttribute("transform", t));
+  }
+}
+function spotBox(spot) {
+  // the text as laid out (moved + scaled), padded so thin handwriting is easy to hit
+  const b = rawBox(spot), { dx, dy, k } = tr(spot.key), a = anchorOf(spot);
+  return { x: a.x + (b.x - a.x) * k + dx - 14, y: a.y + (b.y - a.y) * k + dy - 8, w: b.w * k + 28, h: b.h * k + 16 };
+}
+function rawBox(spot) {
+  // union of the text nodes' own boxes in SVG units, before layout
+  let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+  for (const id of spot.nodes) {
+    const b = $(id).getBBox();
+    if (!b.width) continue;
+    x1 = Math.min(x1, b.x); y1 = Math.min(y1, b.y); x2 = Math.max(x2, b.x + b.width); y2 = Math.max(y2, b.y + b.height);
+  }
+  if (x1 === Infinity) { // empty text: fall back to its anchor point
+    const n = $(spot.nodes[0]); const x = +n.getAttribute("x"), y = +n.getAttribute("y"), fs = +n.getAttribute("font-size");
+    const w = 160;
+    x1 = spot.align === "right" ? x - w : spot.align === "center" ? x - w / 2 : x; x2 = x1 + w; y1 = y - fs; y2 = y + fs * .2;
+  }
+  return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
+}
+function svgPoint(e) {
+  const r = $("tape").getBoundingClientRect(), k = 1280 / r.width;
+  return { x: (e.clientX - r.left) * k, y: (e.clientY - r.top) * k };
+}
+function spotAt(e) {
+  if (document.body.classList.contains("listen")) return null;
+  const p = svgPoint(e);
+  return SPOTS.find((sp) => { const b = spotBox(sp); return p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h; }) || null;
+}
+
+let editing = null;
+function startEdit(spot) {
+  endEdit();
+  const svgR = $("tape").getBoundingClientRect(), wrapR = $("tapeWrap").getBoundingClientRect();
+  const k = svgR.width / 1280, b = spotBox(spot);
+  const first = $(spot.nodes[0]);
+  const fs = (spot.key === "c" ? 44 : +first.getAttribute("font-size")) * tr(spot.key).k;
+  const minW = { t: 520, d: 260, c: 170, b: 520, l: 200 }[spot.key] * Math.min(1, tr(spot.key).k);
+  const w = Math.max(b.w, minW);
+  let left = b.x;
+  if (spot.align === "right") left = b.x + b.w - w;
+  if (spot.align === "center") left = b.x + b.w / 2 - w / 2;
+
+  const inp = document.createElement("input");
+  inp.type = "text"; inp.className = "inline-edit"; inp.maxLength = spot.max;
+  inp.value = state[spot.key] || "";
+  inp.setAttribute("aria-label", { t: "Title", d: "Date", c: "Tape type", b: "Brand", l: "Length" }[spot.key]);
+  const ink = spot.ink === "accent" ? state.a : spot.ink;
+  Object.assign(inp.style, {
+    left: (left * k + svgR.left - wrapR.left) + "px",
+    top: ((spot.key === "c" ? b.y + b.h / 2 - fs * .65 : b.y) * k + svgR.top - wrapR.top) + "px",
+    width: w * k + "px", height: (spot.key === "c" ? fs * 1.3 : b.h) * k + "px",
+    fontFamily: `"${spot.hand ? HANDS[state.f] : spot.font}"`, fontSize: fs * k + "px",
+    textAlign: spot.align || "left", textTransform: spot.upper ? "uppercase" : "none",
+  });
+  inp.style.setProperty("--edit-ink", ink);
+  inp.style.setProperty("--edit-ring", spot.ring === "accent" ? state.a : spot.ring);
+  inp.addEventListener("input", () => {
+    state[spot.key] = spot.upper ? inp.value.toUpperCase() : inp.value;
+    if (FIELD_FOR[spot.key]) $(FIELD_FOR[spot.key]).value = state[spot.key];
+    render();
+  });
+  inp.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); endEdit(); } });
+  inp.addEventListener("blur", () => endEdit());
+  inp.addEventListener("click", (e) => e.stopPropagation());
+  spot.nodes.forEach((id) => $(id).setAttribute("opacity", "0"));
+  $("sel").setAttribute("display", "none");
+  $("tapeWrap").appendChild(inp);
+  editing = { spot, inp };
+  inp.focus(); inp.select();
+}
+function endEdit() {
+  if (!editing) return;
+  const { spot, inp } = editing;
+  editing = null;
+  spot.nodes.forEach((id) => $(id).removeAttribute("opacity"));
+  inp.remove();
+  render();
+}
+
+/* ---------- Move & resize ---------- */
+let selected = null, drag = null, suppressClick = false;
+function select(spot) { selected = spot; drawSel(); }
+function drawSel() {
+  const g = $("sel");
+  if (!g) return;
+  if (!selected || editing || document.body.classList.contains("listen")) { g.setAttribute("display", "none"); return; }
+  const b = spotBox(selected);
+  for (const id of ["selBox", "selBox2"]) {
+    const r = $(id); r.setAttribute("x", b.x); r.setAttribute("y", b.y); r.setAttribute("width", b.w); r.setAttribute("height", b.h);
+  }
+  $("selHandle").setAttribute("cx", b.x + b.w); $("selHandle").setAttribute("cy", b.y + b.h);
+  g.removeAttribute("display");
+}
+function onHandle(p) {
+  if (!selected) return false;
+  const b = spotBox(selected);
+  return Math.hypot(p.x - (b.x + b.w), p.y - (b.y + b.h)) < 30;
+}
+const clampK = (k) => Math.max(0.3, Math.min(4, k));
+
+function wireDrag() {
+  const tape = $("tape");
+  tape.addEventListener("pointerdown", (e) => {
+    if (e.button || document.body.classList.contains("listen") || editing) return;
+    const p = svgPoint(e);
+    if (onHandle(p)) {
+      const b = spotBox(selected), c = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
+      drag = { mode: "scale", spot: selected, c, d0: Math.max(10, Math.hypot(p.x - c.x, p.y - c.y)), k0: tr(selected.key).k, moved: false };
+    } else {
+      const spot = spotAt(e);
+      if (!spot) return;
+      const { dx, dy } = tr(spot.key);
+      drag = { mode: "move", spot, start: p, dx0: dx, dy0: dy, wasSel: selected === spot, moved: false };
+      select(spot);
+    }
+    tape.setPointerCapture(e.pointerId);
+    tape.classList.add("dragging");
+    e.preventDefault();
+  });
+  tape.addEventListener("pointermove", (e) => {
+    const p = svgPoint(e);
+    if (!drag) {
+      const h = !document.body.classList.contains("listen") && onHandle(p);
+      tape.classList.toggle("over-handle", h);
+      tape.classList.toggle("over-text", !h && !!spotAt(e));
+      return;
+    }
+    if (drag.mode === "move") {
+      const dx = p.x - drag.start.x, dy = p.y - drag.start.y;
+      if (!drag.moved && Math.hypot(dx, dy) < 6) return;
+      drag.moved = true;
+      setTr(drag.spot.key, { dx: Math.round(drag.dx0 + dx), dy: Math.round(drag.dy0 + dy) });
+    } else {
+      drag.moved = true;
+      const k = clampK(drag.k0 * Math.hypot(p.x - drag.c.x, p.y - drag.c.y) / drag.d0);
+      // scale about the box centre: shift so the centre stays put
+      const before = spotBox(drag.spot);
+      setTr(drag.spot.key, { k: +k.toFixed(3) });
+      applyLayout();
+      const after = spotBox(drag.spot), t = tr(drag.spot.key);
+      setTr(drag.spot.key, { dx: Math.round(t.dx + (before.x + before.w / 2 - after.x - after.w / 2)), dy: Math.round(t.dy + (before.y + before.h / 2 - after.y - after.h / 2)) });
+    }
+    applyLayout(); drawSel();
+  });
+  const finish = () => {
+    if (!drag) return;
+    const d = drag; drag = null;
+    tape.classList.remove("dragging");
+    suppressClick = true;
+    if (d.mode === "move" && !d.moved && d.wasSel) startEdit(d.spot);
+  };
+  tape.addEventListener("pointerup", finish);
+  tape.addEventListener("pointercancel", finish);
+  tape.addEventListener("click", () => {
+    if (suppressClick) { suppressClick = false; return; }
+    if (selected) { select(null); return; } // first click off the text just drops the selection
+    play();
+  });
+  tape.addEventListener("keydown", (e) => {
+    if (selected && !editing) {
+      const step = e.shiftKey ? 20 : 4, t = tr(selected.key);
+      const moves = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
+      if (moves[e.key]) { e.preventDefault(); setTr(selected.key, { dx: t.dx + moves[e.key][0], dy: t.dy + moves[e.key][1] }); render(); return; }
+      if (e.key === "+" || e.key === "=" || e.key === "-") { e.preventDefault(); setTr(selected.key, { k: clampK(t.k * (e.key === "-" ? 0.92 : 1.08)) }); render(); return; }
+      if (e.key === "Enter") { e.preventDefault(); startEdit(selected); return; }
+      if (e.key === "Escape") { select(null); return; }
+    }
+    if (e.key === " " || e.key === "Enter") { e.preventDefault(); play(); }
+  });
+  document.addEventListener("pointerdown", (e) => { if (selected && !$("tapeWrap").contains(e.target)) select(null); });
+}
+
+/* ---------- Editor wiring ---------- */
+function buildControls() {
+  HANDS.forEach((h, i) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "chip hand"; b.textContent = "Abc"; b.title = h;
+    b.style.fontFamily = `"${h}"`;
+    b.onclick = () => { state.f = i; render(); };
+    $("hands").appendChild(b);
+  });
+  LENGTHS.forEach((l) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "chip"; b.textContent = l;
+    b.onclick = () => { state.l = l; render(); };
+    $("lengths").appendChild(b);
+  });
+  PALETTES.forEach((p) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "pal"; b.title = p.name; b.setAttribute("aria-label", p.name);
+    b.dataset.s = p.s; b.dataset.a = p.a;
+    b.style.setProperty("--a", p.s); b.style.setProperty("--b", p.a);
+    b.onclick = () => { state.s = p.s; state.a = p.a; render(); };
+    $("palettes").appendChild(b);
+  });
+
+  const bind = (id, key) => $(id).addEventListener("input", (e) => { state[key] = e.target.value; render(); });
+  bind("fTitle", "t"); bind("fDate", "d"); bind("fBrand", "b"); bind("fCode", "c");
+  bind("cShell", "s"); bind("cAccent", "a");
+
+  $("fUrl").addEventListener("input", (e) => {
+    state.u = e.target.value;
+    const uri = parseSpotify(state.u);
+    const hint = $("urlHint");
+    if (!state.u) { hint.className = "hint"; hint.textContent = "Playlist, album or track link."; }
+    else if (uri) { hint.className = "hint ok"; hint.textContent = "Dubbed " + uri.split(":")[1] + " onto the tape."; }
+    else { hint.className = "hint err"; hint.textContent = "That doesn't look like a Spotify link."; }
+    if (uri) { setPlaying(false); setProgress(0); mountPlayer(); setStatus("Tape loaded. Hit play."); }
+    else if (!state.u) mountPlayer();
+  });
+
+  wireDrag();
+  addEventListener("resize", endEdit);
+  $("resetLayout").onclick = () => { state.x = {}; render(); };
+  $("kPlay").onclick = play;
+  $("kStop").onclick = stop;
+  $("kRew").onclick = rewind;
+
+  $("share").onclick = async () => {
+    const url = shareURL();
+    history.replaceState(null, "", url);
+    const hint = $("actionHint");
+    try { await navigator.clipboard.writeText(url); hint.className = "hint ok"; hint.textContent = "Link copied. Anyone who opens it gets the tape."; }
+    catch { hint.className = "hint"; hint.textContent = "Copy it from the address bar."; }
+  };
+  $("preview").onclick = () => setListen(true);
+  $("makeOwn").onclick = () => setListen(false);
+  $("png").onclick = downloadPNG;
+}
+
+function setListen(on) {
+  endEdit();
+  selected = null;
+  drawSel();
+  document.body.classList.toggle("listen", on);
+  $("tagline").textContent = on ? "someone made you a tape · press play" : "dub a playlist onto tape · share the link";
+  requestAnimationFrame(render);
+}
+
+function syncInputs() {
+  $("fUrl").value = state.u; $("fTitle").value = state.t; $("fDate").value = state.d;
+  $("fBrand").value = state.b; $("fCode").value = state.c;
+}
+
+/* ---------- Boot ---------- */
+let fromLink = false;
+if (location.hash.length > 1) {
+  try { Object.assign(state, dec(location.hash.slice(1))); fromLink = true; } catch {}
+  if (!state.x || typeof state.x !== "object") state.x = {};
+}
+syncInputs();
+buildControls();
+drawStatic();
+drawTopo();
+setProgress(0);
+render();
+if (fromLink) { setListen(true); if (parseSpotify(state.u)) setStatus("Someone made you a tape. Press play."); }
+document.fonts.ready.then(render);
+addEventListener("resize", drawTopo);
+requestAnimationFrame(tick);
+mountPlayer();
+
+const s = document.createElement("script");
+s.src = "https://open.spotify.com/embed/iframe-api/v1";
+s.async = true;
+document.body.appendChild(s);
+</script>
+</body>
+</html>
